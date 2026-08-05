@@ -56,11 +56,19 @@ class FxRates:
         return (amount / rate).quantize(Decimal("0.01"))
 
 
-def get_fx_rates(cache_path: Path = CACHE_PATH) -> FxRates:
+def get_fx_rates(cache_path: Path = CACHE_PATH, force_refresh: bool = False) -> FxRates:
+    """`force_refresh=True` (used by run_evaluation.run() on every explicit
+    pipeline run) skips the same-day cache and always hits the live sources,
+    so clicking 'Run pipeline' twice in one day still gets today's latest
+    rate rather than silently reusing the first run's. Single-loan review
+    re-checks call this with the default False, so they reuse whatever rate
+    the most recent run already fetched - one rate set per run, never a live
+    call per reviewed loan (Evaluation_Engine.md section 5).
+    """
     today = date.today().isoformat()
 
     cached = _read_cache(cache_path)
-    if cached and cached["date"] == today and not cached.get("stale"):
+    if not force_refresh and cached and cached["date"] == today and not cached.get("stale"):
         return _from_cache_dict(cached)
 
     for source_name, url, param_style in (

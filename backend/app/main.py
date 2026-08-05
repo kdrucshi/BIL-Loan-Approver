@@ -9,6 +9,7 @@ Run with:  uvicorn app.main:app --reload --port 8000
 from concurrent.futures import ThreadPoolExecutor
 from decimal import Decimal
 import json
+import re
 
 import dotenv
 from fastapi import FastAPI, HTTPException
@@ -87,12 +88,9 @@ def dashboard(run_id: str | None = None):
         2: summary["rule2_fails"],
         3: summary["rule3_fails"],
     }
-    any_fail = fails[1] + fails[2] + fails[3]  # note: overlapping fails may double count; see /api/compliance for exact any-fail count
-    exact_any_fail = conn.execute(
-        "SELECT COUNT(*) AS n FROM rule_results WHERE run_id = ? "
-        "AND NOT (rule1_pass = 1 AND rule2_pass = 1 AND rule3_pass = 1)",
-        (rid,),
-    ).fetchone()["n"]
+    # queries.any_fail_count is the exact (non-overlapping) any-fail count -
+    # shared with the page assistant's dashboard context so the two never drift.
+    exact_any_fail = queries.any_fail_count(conn, rid)
     compliant = total - exact_any_fail
 
     return {
@@ -120,6 +118,7 @@ def dashboard(run_id: str | None = None):
     }
 
 
+# ---- FIX: /api/compliance now passes run_id to portfolio_by_company ----
 @app.get("/api/compliance")
 def compliance(run_id: str | None = None):
     conn = get_connection()
@@ -127,7 +126,7 @@ def compliance(run_id: str | None = None):
     return {
         "run_id": rid,
         "rules": queries.rule_breakdown(conn, rid),
-        "portfolio": queries.portfolio_by_company(conn),
+        "portfolio": queries.portfolio_by_company(conn, rid),
     }
 
 
@@ -225,6 +224,26 @@ def rule3_decide(loan_id: str, body: Rule3Decision, run_id: str | None = None):
         raise HTTPException(400, str(exc))
 
 
+class BulkDecision(BaseModel):
+    decision: str  # "accept" | "ignore"
+    max_loans: int | None = None  # optional cap - mainly useful for a Rule 3 "accept" (LLM call per loan)
+
+
+@app.post("/api/review/groups/{group_id}/bulk-decide")
+def review_bulk_decide(group_id: str, body: BulkDecision, run_id: str | None = None):
+    """Applies accept/ignore to EVERY loan currently in a review group in one
+    call. This is what the Review tab's 'Accept all' / 'Ignore all' buttons
+    call now - they previously only updated local UI state and never
+    reached the backend, so nothing was actually fixed, re-checked, or
+    reflected in the dashboard."""
+    conn = get_connection()
+    rid = _resolve_run_id(conn, run_id)
+    try:
+        return review_actions.bulk_decide_group(rid, group_id, body.decision, body.max_loans)
+    except review_actions.ReviewError as exc:
+        raise HTTPException(400, str(exc))
+
+
 @app.post("/api/review/generate-wave1")
 def generate_wave1(run_id: str | None = None, max_loans: int = 100):
     """Batch-generate Rule 3 suggestions for the settled Rule-3-only bucket
@@ -269,9 +288,9 @@ def fx_fragility_summary(run_id: str | None = None, band_pct: float = 5.0):
             {"role": "system", "content": "You narrate deterministic financial risk tables. Never invent numbers not given to you. Never predict future rate movements."},
             {"role": "user", "content": prompt},
         ],
-        # This is the one narrative/analysis surface in the app (as opposed to
-        # the page assistant's short Q&A) - uses the larger chat model.
-        model="gpt-5.4",
+        # Short grounded narration, same model tier as the page assistant -
+        # see the MODEL_CHAT / MODEL_ORCHESTRATOR comment in llm_client.py.
+        model=llm_client.MODEL_CHAT,
     )
     return {"run_id": rid, "summary": summary}
 
@@ -284,15 +303,46 @@ class AssistantRequest(BaseModel):
     history: list[dict] = []  # [{"role": "user"|"assistant", "content": "..."}], most recent last
 
 
-def _assistant_context(conn, page: str, run_id: str | None) -> dict:
+# Loan IDs are "L" + digits (e.g. L000012, see loans.csv/companies.json).
+# Letting the reviewer just type a loan number into the chat is friendlier
+# than adding a separate lookup field, and detecting it here keeps the
+# frontend page-agnostic - it just forwards whatever the user typed.
+_LOAN_ID_RE = re.compile(r"\bl\d{5,}\b", re.IGNORECASE)
+
+
+def _extract_loan_id(message: str) -> str | None:
+    match = _LOAN_ID_RE.search(message)
+    return match.group(0).upper() if match else None
+
+
+def _assistant_context(conn, page: str, run_id: str | None, message: str = "") -> dict:
     """Pulls the same data the page itself renders, via the same query
     functions the REST endpoints use - the assistant never sees anything the
     reviewer couldn't also see on screen, and never computes its own numbers."""
     rid = _resolve_run_id(conn, run_id)
     if page == "dashboard":
-        return {"run_summary": queries.run_summary(conn, rid), "recent_runs": queries.list_runs(conn, limit=5)}
+        summary = queries.run_summary(conn, rid)
+        any_fail = queries.any_fail_count(conn, rid)
+        context = {
+            "run_summary": summary,
+            # Exact counts matching what the Dashboard hero/rule cards show -
+            # not the raw per-rule sums, which can double-count a loan that
+            # fails more than one rule.
+            "loans_passing_all_rules_now": summary["total_loans"] - any_fail,
+            "loans_failing_at_least_one_rule_now": any_fail,
+            # Precedence-aware (Rule 2 -> Rule 1 -> Rule 3), matches the
+            # Review tab exactly - "how many are pending human review".
+            "pending_human_review_by_rule": queries.pending_by_rule(conn, rid),
+            "recent_runs": queries.list_runs(conn, limit=5),
+        }
+        loan_id = _extract_loan_id(message)
+        if loan_id:
+            detail = queries.loan_detail(conn, rid, loan_id)
+            context["loan_lookup"] = detail if detail is not None else {"found": False, "loan_id": loan_id}
+        return context
     if page == "compliance":
-        return {"rules": queries.rule_breakdown(conn, rid), "portfolio": queries.portfolio_by_company(conn)}
+        # FIX: pass run_id to portfolio_by_company
+        return {"rules": queries.rule_breakdown(conn, rid), "portfolio": queries.portfolio_by_company(conn, rid)}
     if page == "insights":
         return queries.fx_fragility(conn, rid)
     if page == "review":
@@ -305,21 +355,38 @@ def _assistant_context(conn, page: str, run_id: str | None) -> dict:
 @app.post("/api/assistant")
 def assistant(body: AssistantRequest, run_id: str | None = None):
     conn = get_connection()
-    context = _assistant_context(conn, body.page, run_id)
+    context = _assistant_context(conn, body.page, run_id, body.message)
 
     system = (
         "You are the page assistant embedded in a loan-compliance review tool. "
-        "Explain what's shown on the current page and answer questions about it. "
-        "Ground every claim ONLY in the JSON context below - never invent a number, "
-        "a loan, or a company that isn't in it. If the context doesn't contain the "
-        "answer, say so plainly instead of guessing. Keep replies to 2-4 sentences "
-        "unless the question needs a list.\n\n"
+        "Respond naturally and briefly to greetings, thanks, and small talk - those "
+        "don't need to be grounded in data. For any factual claim about loans, "
+        "counts, rules, or figures, ground it ONLY in the JSON context below - never "
+        "invent a number, a loan, or a company that isn't in it. If the context "
+        "doesn't contain the answer to a data question, say so plainly instead of "
+        "guessing.\n\n"
+        "If the context includes a 'loan_lookup' entry (the reviewer asked about a "
+        "specific loan), explain it clearly using this EXACT format:\n\n"
+        "1. State the loan basics: company, loan_value, loan_currency, asset, asset_value.\n"
+        "2. For EACH rule, start the sentence with the verdict word from the context "
+        "(rule1_verdict, rule2_verdict, rule3_verdict - these say PASS or FAIL). "
+        "Use this pattern:\n"
+        "   - 'Rule 1: FAIL. The EUR value is X, which is below the EUR 25,000 threshold.'\n"
+        "   - 'Rule 1: PASS. The EUR value is X, which is above EUR 25,000.'\n"
+        "   - 'Rule 2: FAIL. The loan is in X but should be Y (company HQ is in Z).'\n"
+        "   - 'Rule 2: PASS. The currency X matches the expected currency.'\n"
+        "   - 'Rule 3: FAIL. Coverage ratio is X, which is below 0.5 (50%).'\n"
+        "   - 'Rule 3: PASS. Coverage ratio is X, which is above 0.5 (50%).'\n"
+        "CRITICAL: Never say 'passes' then 'fails' in the same sentence. Use the "
+        "verdict field directly — if rule1_verdict says FAIL, the rule FAILED, period.\n"
+        "3. Mention any 'suggestions' entries (these are the recommended fix).\n"
+        "4. If 'loan_lookup' shows found: false, say the loan isn't in the current run.\n\n"
+        "Keep replies to 2-4 sentences unless the question needs a list.\n\n"
         f"Current page: {body.page}\nContext JSON:\n{json.dumps(context, default=str)}"
     )
     messages = [{"role": "system", "content": system}, *body.history, {"role": "user", "content": body.message}]
-    reply = llm_client.complete(messages, model="gpt-5.4-mini", max_completion_tokens=300)
+    reply = llm_client.complete(messages, model=llm_client.MODEL_CHAT, max_completion_tokens=300)
     return {"reply": reply}
-
 
 # ---------- Reports: PDF (aggregates) + CSV (row-level), per run ----------
 

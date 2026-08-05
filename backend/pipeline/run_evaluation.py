@@ -81,7 +81,12 @@ def run() -> str:
     print(f"[evaluate] Loaded {len(companies)} companies from PDF cache.")
     _seed_reference_tables(conn, companies)
 
-    fx = get_fx_rates()
+    # force_refresh=True: every explicit pipeline run fetches a live FX rate
+    # rather than silently reusing an earlier run's same-day cache - a
+    # reviewer clicking "Run pipeline" expects today's actual rate, not a
+    # snapshot from hours ago (fx.py still falls back to the cache/stale
+    # chain if the live fetch fails).
+    fx = get_fx_rates(force_refresh=True)
     print(f"[evaluate] FX: source={fx.source} date={fx.rate_date} stale={fx.stale}")
 
     conn.execute(
@@ -170,6 +175,16 @@ def run() -> str:
         _log_event(conn, run_id, "evaluate", None, f"{mismatches} CSV/PDF hq_country disagreements flagged")
     _log_event(conn, run_id, "score", None, f"Pre-review compliance: {pre_review_compliance}%")
     conn.commit()
+
+    # ---- FIX #1: Generate deterministic suggestions for Rule 1 and Rule 2 ----
+    # Rule 1 ("remove from report") and Rule 2 ("change currency to X") are
+    # deterministic — no LLM needed. Without these rows in the `suggestions`
+    # table, the review UI and chatbot show "no suggestions" for R1/R2 loans.
+    # Rule 3 suggestions are LLM-generated lazily (Wave 1/2) and stay as-is.
+    _generate_deterministic_suggestions(conn, run_id)
+    _log_event(conn, run_id, "evaluate", None, "Deterministic suggestions generated for Rule 1 and Rule 2 failures")
+    conn.commit()
+
     conn.close()
 
     elapsed = time.time() - start
@@ -180,6 +195,94 @@ def run() -> str:
         f"pre_review_compliance={pre_review_compliance}%"
     )
     return run_id
+
+
+def _generate_deterministic_suggestions(conn, run_id: str) -> None:
+    """Insert suggestion records for all Rule 1 and Rule 2 failures.
+
+    These are deterministic (values come from the static currency table and
+    the EUR threshold, not from an LLM) so they can be batch-inserted right
+    after evaluation, before any reviewer touches the data.
+
+    Rule 3 suggestions require retrieval + LLM and are generated lazily
+    by the agent (Action_Engine.md section 7, Wave 1/2).
+    """
+    # --- Rule 2: change currency to expected ---
+    r2_rows = conn.execute(
+        """
+        SELECT rr.loan_id, rr.expected_currency, l.loan_currency,
+               l.company_name, l.hq_country
+        FROM rule_results rr
+        JOIN loans l ON l.loan_id = rr.loan_id
+        WHERE rr.run_id = ? AND rr.rule2_pass = 0
+        """,
+        (run_id,),
+    ).fetchall()
+
+    r2_suggestions = []
+    for r in r2_rows:
+        r2_suggestions.append((
+            r["loan_id"],
+            run_id,
+            2,  # rule
+            f"Change currency from {r['loan_currency']} to {r['expected_currency']}",
+            json.dumps({"currency": r["expected_currency"]}),
+            None,  # confidence: not applicable for deterministic fixes
+            f"{r['company_name']} is headquartered in {r['hq_country']}; "
+            f"expected currency is {r['expected_currency']} but loan is "
+            f"reported in {r['loan_currency']}.",
+            "pending",
+        ))
+
+    if r2_suggestions:
+        conn.executemany(
+            """
+            INSERT OR IGNORE INTO suggestions
+                (loan_id, run_id, rule, suggestion_text, suggested_value,
+                 confidence, reasoning, status)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            r2_suggestions,
+        )
+    print(f"[evaluate] Generated {len(r2_suggestions)} Rule 2 suggestions")
+
+    # --- Rule 1: remove from report ---
+    r1_rows = conn.execute(
+        """
+        SELECT rr.loan_id, rr.loan_value_eur
+        FROM rule_results rr
+        WHERE rr.run_id = ? AND rr.rule1_pass = 0
+        """,
+        (run_id,),
+    ).fetchall()
+
+    r1_suggestions = []
+    for r in r1_rows:
+        r1_suggestions.append((
+            r["loan_id"],
+            run_id,
+            1,  # rule
+            "Remove from report (below EUR 25,000 threshold)",
+            None,  # suggested_value: no correctable value for Rule 1
+            None,  # confidence: deterministic
+            f"Loan value in EUR is {r['loan_value_eur']}, which is not strictly "
+            f"more than EUR 25,000.00. This loan is out of scope for reporting.",
+            "pending",
+        ))
+
+    if r1_suggestions:
+        conn.executemany(
+            """
+            INSERT OR IGNORE INTO suggestions
+                (loan_id, run_id, rule, suggestion_text, suggested_value,
+                 confidence, reasoning, status)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            r1_suggestions,
+        )
+    print(f"[evaluate] Generated {len(r1_suggestions)} Rule 1 suggestions")
+
+    conn.commit()
 
 
 def _flush_batch(conn, run_id: str, batch: list[tuple[dict, dict]], batch_inputs: list[dict]):

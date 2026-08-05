@@ -51,6 +51,18 @@ def post_review_compliance(conn, run_id: str, total_loans: int) -> float | None:
     return round(100 * compliant / denom, 2)
 
 
+def any_fail_count(conn, run_id: str) -> int:
+    """Loans currently failing at least one rule, per this run's rule_results
+    (live, not the static per-rule counts stamped at evaluation time). Single
+    source of truth shared by /api/dashboard and the page assistant, so the
+    two never drift apart."""
+    return conn.execute(
+        "SELECT COUNT(*) AS n FROM rule_results WHERE run_id = ? "
+        "AND NOT (rule1_pass = 1 AND rule2_pass = 1 AND rule3_pass = 1)",
+        (run_id,),
+    ).fetchone()["n"]
+
+
 def list_runs(conn, limit: int = 20) -> list[dict]:
     """Recomputes post_review_compliance per run (run_meta's stored column is
     never updated after evaluation) so History / Recent-runs reflect reviewer
@@ -76,6 +88,8 @@ def score_trend(conn, limit: int = 7) -> list[dict]:
     return [dict(r) for r in rows]
 
 
+# ---- FIX #4: rule_breakdown now includes EUR exposure per rule ----
+
 def rule_breakdown(conn, run_id: str) -> list[dict]:
     row = conn.execute(
         "SELECT total_loans, rule1_fails, rule2_fails, rule3_fails FROM run_meta WHERE run_id = ?",
@@ -84,6 +98,17 @@ def rule_breakdown(conn, run_id: str) -> list[dict]:
     if row is None:
         return []
     total = row["total_loans"]
+
+    # EUR exposure per rule (SUM of loan_value_eur for loans failing that rule)
+    eur_exposure = {}
+    for rule in (1, 2, 3):
+        eur_row = conn.execute(
+            f"SELECT SUM(CAST(loan_value_eur AS REAL)) AS eur FROM rule_results "
+            f"WHERE run_id = ? AND rule{rule}_pass = 0",
+            (run_id,),
+        ).fetchone()
+        eur_exposure[rule] = eur_row["eur"] or 0.0
+
     defs = [
         (1, "Minimum loan value", "> EUR 25,000 (EUR)", row["rule1_fails"]),
         (2, "Currency matches HQ", "currency == country", row["rule2_fails"]),
@@ -97,22 +122,32 @@ def rule_breakdown(conn, run_id: str) -> list[dict]:
             "passed": total - fails,
             "failed": fails,
             "fail_pct": round(100 * fails / total, 2) if total else 0.0,
+            "eur_exposure": eur_exposure[r],
         }
         for r, name, cond, fails in defs
     ]
 
 
-def portfolio_by_company(conn, limit: int = 10) -> list[dict]:
+# ---- FIX #2: portfolio_by_company now uses EUR-normalized values ----
+# Old version summed raw loan_value across mixed currencies (GBP, JPY, EUR
+# etc.) making the sort order meaningless. Now joins rule_results to use
+# loan_value_eur, matching what reports.py._portfolio_eur already does.
+# Also adds a failure count per company and requires run_id.
+
+def portfolio_by_company(conn, run_id: str, limit: int = 10) -> list[dict]:
     rows = conn.execute(
         """
-        SELECT company_name, hq_country, COUNT(*) AS n_loans,
-               SUM(CAST(loan_value AS REAL)) AS total_value, loan_currency
-        FROM loans
-        GROUP BY company_name
-        ORDER BY total_value DESC
+        SELECT l.company_name, l.hq_country, COUNT(*) AS n_loans,
+               SUM(CAST(rr.loan_value_eur AS REAL)) AS total_eur,
+               SUM(CASE WHEN NOT (rr.rule1_pass = 1 AND rr.rule2_pass = 1 AND rr.rule3_pass = 1)
+                   THEN 1 ELSE 0 END) AS failures
+        FROM loans l
+        JOIN rule_results rr ON rr.loan_id = l.loan_id AND rr.run_id = ?
+        GROUP BY l.company_name, l.hq_country
+        ORDER BY total_eur DESC
         LIMIT ?
         """,
-        (limit,),
+        (run_id, limit),
     ).fetchall()
     return [dict(r) for r in rows]
 
@@ -282,3 +317,61 @@ def bucket_loans(conn, run_id: str, bucket: int, limit: int = 50, offset: int = 
 
     return {"total": total, "limit": limit, "offset": offset, "loans": [dict(r) for r in rows]}
 
+
+def pending_by_rule(conn, run_id: str) -> dict:
+    """Loans currently open in each Review-queue bucket, precedence-aware
+    (Action_Engine.md section 6) - reuses the SAME _BUCKET_WHERE clauses
+    bucket_loans()/review_groups() use, so this always matches what the
+    Review tab shows, never a separately-drifting count."""
+    counts = {
+        rule: conn.execute(
+            f"SELECT COUNT(*) AS n FROM rule_results rr WHERE rr.run_id = ? AND {where}",
+            (run_id,),
+        ).fetchone()["n"]
+        for rule, where in _BUCKET_WHERE.items()
+    }
+    counts["total"] = sum(counts.values())
+    return counts
+
+
+def loan_detail(conn, run_id: str, loan_id: str) -> dict | None:
+    """Full grounded detail for ONE loan - its data, this run's rule
+    verdicts, any suggestion generated for it, and its audit history. This is
+    what lets the page assistant honestly answer "why did loan X fail?"
+    without inventing anything not already in the database. Returns None if
+    the loan doesn't exist at all."""
+    loan = conn.execute("SELECT * FROM loans WHERE loan_id = ?", (loan_id,)).fetchone()
+    if loan is None:
+        return None
+
+    rr = conn.execute(
+        "SELECT rule1_pass, rule2_pass, rule3_pass, loan_value_eur, expected_currency, coverage_ratio "
+        "FROM rule_results WHERE run_id = ? AND loan_id = ?",
+        (run_id, loan_id),
+    ).fetchone()
+
+    suggestions = conn.execute(
+        "SELECT rule, suggestion_text, reasoning, status FROM suggestions "
+        "WHERE run_id = ? AND loan_id = ?",
+        (run_id, loan_id),
+    ).fetchall()
+
+    events = conn.execute(
+        "SELECT ts, source, message, meta FROM audit_events WHERE loan_id = ? ORDER BY event_id ASC",
+        (loan_id,),
+    ).fetchall()
+
+    rule_results_dict = dict(rr) if rr else None
+    if rule_results_dict:
+        rule_results_dict["rule1_verdict"] = "FAIL" if not rr["rule1_pass"] else "PASS"
+        rule_results_dict["rule2_verdict"] = "FAIL" if not rr["rule2_pass"] else "PASS"
+        rule_results_dict["rule3_verdict"] = "FAIL" if not rr["rule3_pass"] else "PASS"
+
+    return {
+        "loan": dict(loan),
+        "rule_results_this_run": rule_results_dict,
+        "suggestions": [dict(s) for s in suggestions],
+        "audit_events": [
+            {**dict(e), "meta": json.loads(e["meta"]) if e["meta"] else None} for e in events
+        ],
+    }

@@ -1,0 +1,9 @@
+services:
+  opa:
+    image: openpolicyagent/opa:latest
+    container_name: bil-compliance-opa
+    ports:
+      - "8181:8181"
+    volumes:
+      - ./backend/policies:/policies
+    command: ["run", "--server", "--addr", "0.0.0.0:8181", "/policies"]

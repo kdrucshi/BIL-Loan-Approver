@@ -71,7 +71,10 @@ def _select_and_explain(state: Rule3State) -> Rule3State:
         [
             {"role": "system", "content": "You select loan collateral substitutes. Always respond with the exact JSON shape requested, nothing else."},
             {"role": "user", "content": prompt},
-        ]
+        ],
+        # The one place an LLM makes a real judgement call - see the
+        # MODEL_CHAT / MODEL_ORCHESTRATOR comment in agent/llm_client.py.
+        model=llm_client.MODEL_ORCHESTRATOR,
     )
     try:
         parsed = json.loads(raw)

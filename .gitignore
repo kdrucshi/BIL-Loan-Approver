@@ -1,0 +1,20 @@
+# Secrets - never commit
+.env
+.env.local
+*.env
+
+# Runtime data - loan CSV, parsed PDF cache, SQLite DB, FX cache (regenerated, not source)
+data/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+*.egg-info/
+
+# Node / frontend build output
+node_modules/
+frontend/dist/
+
+# OS / editor cruft
+.DS_Store

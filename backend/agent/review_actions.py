@@ -10,6 +10,7 @@ import json
 from decimal import Decimal
 
 from agent import rule3_graph, tools
+from app.queries import _BUCKET_WHERE
 from pipeline.compute_inputs import compute_rule_inputs
 from pipeline.db import get_connection
 from pipeline.fx import get_fx_rates
@@ -188,3 +189,70 @@ def decide_rule3(run_id: str, loan_id: str, decision: str, manual_asset: dict | 
     conn.commit()
 
     return {"loan_id": loan_id, "rule": 3, "from": old_asset, "to": applied, "verdict": verdict}
+
+
+def _resolve_group(run_id: str, group_id: str) -> tuple[int, str, tuple]:
+    """Maps a review-group id (see queries.review_groups) to its rule number
+    and the WHERE clause + params that select exactly the loans currently
+    shown under that group - reuses the SAME precedence WHERE clauses
+    (queries._BUCKET_WHERE) the group counts and /api/review/loans are built
+    from, so a bulk action never covers more or fewer loans than the
+    reviewer actually sees."""
+    if group_id == "rule1-remove":
+        return 1, _BUCKET_WHERE[1], (run_id,)
+    if group_id.startswith("rule2-to-"):
+        currency = group_id[len("rule2-to-"):]
+        return 2, f"{_BUCKET_WHERE[2]} AND rr.expected_currency = ?", (run_id, currency)
+    if group_id == "rule3-coverage":
+        return 3, _BUCKET_WHERE[3], (run_id,)
+    raise ReviewError(f"Unknown review group '{group_id}'")
+
+
+def bulk_decide_group(run_id: str, group_id: str, decision: str, max_loans: int | None = None) -> dict:
+    """Applies ONE decision to every loan currently in a review group - this
+    is what 'Accept all' / 'Ignore all' actually call now. Previously those
+    buttons only bumped a local UI counter and never reached the backend.
+
+    Clubbing batches the click, never erases the per-loan audit trail
+    (Action_Engine.md section 8): each loan below still goes through its own
+    decide_ruleN call, so it gets its own re-check through OPA and its own
+    audit_events row - a bulk action is just this loop, not a shortcut.
+
+    Rule 1 and Rule 2 'accept' are cheap (static table / removal, at most one
+    OPA re-check per loan - no LLM). Rule 3 'accept' calls the LLM once per
+    loan to generate a suggestion first, so `max_loans` can cap it for
+    demo-time bulk actions; leave it None for a full, uncapped pass.
+    """
+    if decision not in ("accept", "ignore"):
+        raise ReviewError(f"Bulk decision must be 'accept' or 'ignore', got '{decision}'")
+
+    conn = get_connection()
+    rule, where, params = _resolve_group(run_id, group_id)
+    query = f"SELECT rr.loan_id FROM rule_results rr WHERE rr.run_id = ? AND {where}"
+    loan_ids = [r["loan_id"] for r in conn.execute(query, params).fetchall()]
+    if max_loans is not None:
+        loan_ids = loan_ids[:max_loans]
+
+    applied, errors = [], []
+    for loan_id in loan_ids:
+        try:
+            if rule == 1:
+                decide_rule1(run_id, loan_id, decision)
+            elif rule == 2:
+                decide_rule2(run_id, loan_id, decision)
+            else:  # rule == 3
+                if decision == "accept":
+                    generate_rule3_suggestion(run_id, loan_id)
+                decide_rule3(run_id, loan_id, decision)
+            applied.append(loan_id)
+        except ReviewError as exc:  # noqa: PERF203 - one bad loan shouldn't abort the whole batch
+            errors.append({"loan_id": loan_id, "error": str(exc)})
+
+    return {
+        "group_id": group_id,
+        "rule": rule,
+        "decision": decision,
+        "requested": len(loan_ids),
+        "applied": len(applied),
+        "errors": errors,
+    }

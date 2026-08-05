@@ -13,6 +13,21 @@ import os
 
 from openai import AzureOpenAI
 
+# Single place every model name is chosen - the three call sites (page
+# assistant, insights AI summary, Rule 3 orchestrator) all import these
+# instead of hardcoding a model string, so swapping a deployment name is a
+# one-line change here rather than a hunt across the codebase.
+#
+# MODEL_CHAT          - short, grounded narration/Q&A: the page assistant
+#                       (main.py /api/assistant) and the Insights AI summary
+#                       (main.py /api/insights/fx-fragility/summary).
+# MODEL_ORCHESTRATOR  - the Rule 3 LangGraph agent (rule3_graph.py), the one
+#                       place in the system that makes a real judgement call
+#                       (selecting + explaining a substitute asset), so it
+#                       gets the larger model.
+MODEL_CHAT = os.environ.get("AZURE_OPENAI_CHAT_MODEL", "gpt-5.4-mini")
+MODEL_ORCHESTRATOR = os.environ.get("AZURE_OPENAI_ORCHESTRATOR_MODEL", "gpt-5.4")
+
 _client: AzureOpenAI | None = None
 
 
@@ -35,7 +50,7 @@ def complete(messages: list[dict], model: str | None = None, max_completion_toke
     the configured provider.
     """
     client = _get_client()
-    model = model or os.environ.get("AZURE_OPENAI_CHAT_MODEL", "gpt-5.4-mini")
+    model = model or MODEL_CHAT
     resp = client.chat.completions.create(
         model=model,
         messages=messages,

@@ -2,7 +2,8 @@ import React, { useState, useEffect } from "react";
 import {
   LayoutDashboard, ShieldCheck, ClipboardCheck, History as HistoryIcon,
   Play, ChevronDown, ChevronRight, Sparkles, Check, X, Pencil,
-  Send, Loader2, Circle, Building2, ArrowRight, Zap, Lightbulb
+  Send, Loader2, Circle, Building2, ArrowRight, Zap, Lightbulb,
+  Download, FileText
 } from "lucide-react";
 import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer } from "recharts";
 
@@ -97,6 +98,7 @@ async function loadAllData() {
   });
 
   return {
+    run_id: runId,
     total: dashboard.total,
     fails: dashboard.fails,
     anyFail: dashboard.any_fail,
@@ -144,6 +146,7 @@ async function loadAllData() {
 const DataContext = React.createContext();
 
 const initialData = {
+  run_id: null,
   total: 0,
   fails: { 1: 0, 2: 0, 3: 0 },
   anyFail: 0,
@@ -207,8 +210,8 @@ function Ring({ value, size = 74, stroke = 7, run }) {
 }
 
 /* ---------- Dashboard ---------- */
-function Dashboard() {
-  const { total, fails, anyFail, compliant, pre, post, removed, trend, runs } = React.useContext(DataContext);
+function Dashboard({ onGoInsights }) {
+  const { total, fails, anyFail, compliant, pre, post, trend, insights } = React.useContext(DataContext);
   const mounted = useMounted();
   const score = useCountUp(pre, post, 1600);
   const loans = useCountUp(0, total, 1400);
@@ -221,29 +224,21 @@ function Dashboard() {
       <div style={{ position: "relative", overflow: "hidden", borderRadius: 16, background: `linear-gradient(135deg, ${C.ink} 0%, ${C.ink2} 70%, ${C.ink3} 100%)`, border: `1px solid #232D3E`, padding: 28 }}>
         <div style={{ position: "absolute", top: -90, right: -50, width: 300, height: 300, background: `radial-gradient(circle, ${C.cyan}33 0%, transparent 68%)` }} />
         <div style={{ position: "relative" }}>
-          <div className="flex items-start justify-between flex-wrap" style={{ gap: 20 }}>
-            <div>
-              <Eyebrow dark>Compliance · after healing</Eyebrow>
-              <div className="flex items-end gap-3" style={{ marginTop: 10 }}>
-                <span style={{ fontFamily: MONO, fontSize: 66, fontWeight: 800, lineHeight: 0.9, color: C.amber, letterSpacing: -2 }}>{score.toFixed(1)}<span style={{ fontSize: 32 }}>%</span></span>
-                <div style={{ marginBottom: 8 }}>
-                  <div className="flex items-center gap-2" style={{ fontSize: 13, fontFamily: MONO }}>
-                    <span style={{ color: C.railMute }}>{pre}%</span><ArrowRight size={14} color={C.railMute} /><span style={{ color: C.greenBright, fontWeight: 700 }}>{post}%</span>
-                  </div>
-                  <div style={{ display: "inline-flex", alignItems: "center", gap: 5, marginTop: 6, background: "rgba(52,211,153,0.14)", color: "#6EE7B7", fontSize: 12.5, fontWeight: 700, padding: "3px 9px", borderRadius: 6 }}>
-                    <Zap size={13} /> +{(post - pre).toFixed(1)} pts healed
-                  </div>
+          <div>
+            <Eyebrow dark>Compliance · after healing</Eyebrow>
+            <div className="flex items-end gap-3" style={{ marginTop: 10 }}>
+              <span style={{ fontFamily: MONO, fontSize: 66, fontWeight: 800, lineHeight: 0.9, color: C.amber, letterSpacing: -2 }}>{score.toFixed(1)}<span style={{ fontSize: 32 }}>%</span></span>
+              <div style={{ marginBottom: 8 }}>
+                <div className="flex items-center gap-2" style={{ fontSize: 13, fontFamily: MONO }}>
+                  <span style={{ color: C.railMute }}>{pre}%</span><ArrowRight size={14} color={C.railMute} /><span style={{ color: C.greenBright, fontWeight: 700 }}>{post}%</span>
+                </div>
+                <div style={{ display: "inline-flex", alignItems: "center", gap: 5, marginTop: 6, background: "rgba(52,211,153,0.14)", color: "#6EE7B7", fontSize: 12.5, fontWeight: 700, padding: "3px 9px", borderRadius: 6 }}>
+                  <Zap size={13} /> +{(post - pre).toFixed(1)} pts healed
                 </div>
               </div>
-              <div style={{ color: C.railMute, fontSize: 13.5, marginTop: 12 }}>
-                <b style={{ color: "#fff", fontFamily: MONO }}>{Math.round(loans).toLocaleString()}</b> loans checked · <b style={{ color: "#fff", fontFamily: MONO }}>{anyFail.toLocaleString()}</b> failures remediated by human review
-              </div>
             </div>
-            <div style={{ background: "rgba(255,255,255,0.04)", border: `1px solid #232D3E`, borderRadius: 12, padding: "12px 16px" }}>
-              <div className="text-right">
-                <div style={{ color: C.railMute, fontSize: 11 }}>Removed · Rule 1</div>
-                <div style={{ fontFamily: MONO, fontSize: 22, fontWeight: 700, color: C.r2 }}>{removed.toLocaleString()}</div>
-              </div>
+            <div style={{ color: C.railMute, fontSize: 13.5, marginTop: 12 }}>
+              <b style={{ color: "#fff", fontFamily: MONO }}>{Math.round(loans).toLocaleString()}</b> loans checked · <b style={{ color: "#fff", fontFamily: MONO }}>{anyFail.toLocaleString()}</b> loans currently failing at least one rule
             </div>
           </div>
           <div style={{ marginTop: 22 }}>
@@ -285,14 +280,31 @@ function Dashboard() {
           </div>
         </Panel>
         <Panel style={{ padding: 20 }}>
-          <Eyebrow>Recent runs</Eyebrow>
-          <div className="flex flex-col" style={{ marginTop: 12 }}>
-            {runs.length > 0 ? runs.map((r, i) => (
-              <div key={r.id} className="flex items-center justify-between" style={{ padding: "10px 0", borderTop: i ? `1px solid ${C.line}` : "none" }}>
-                <div className="flex items-center gap-2"><Circle size={8} fill={C.green} color={C.green} /><span style={{ fontFamily: MONO, fontSize: 12.5 }}>{r.id}</span></div>
-                <div className="text-right"><div style={{ fontFamily: MONO, fontSize: 13, fontWeight: 700 }}>{r.score}%</div><div style={{ color: C.mute, fontSize: 11 }}>{r.when}</div></div>
+          <Eyebrow>FX floor proximity</Eyebrow>
+          <div style={{ color: C.mute, fontSize: 11.5, marginTop: 4 }}>Non-EUR loans near the €25,000 Rule 1 line · click for the full view</div>
+          <div className="flex flex-col gap-3" style={{ marginTop: 14 }}>
+            <button
+              onClick={onGoInsights}
+              className="flex items-center justify-between"
+              style={{ width: "100%", textAlign: "left", padding: "12px 14px", borderRadius: 10, border: `1px solid ${C.greenSoft}`, background: C.greenSoft, cursor: "pointer" }}
+            >
+              <div>
+                <div style={{ fontSize: 12.5, fontWeight: 700, color: C.green }}>Fragile passes</div>
+                <div style={{ fontSize: 11, color: C.slate, marginTop: 2 }}>Above the floor, a small adverse move flips them</div>
               </div>
-            )) : <div className="text-slate-400 text-sm mt-4 text-center">No recent runs</div>}
+              <span style={{ fontFamily: MONO, fontSize: 20, fontWeight: 800, color: C.green }}>{(insights?.fragilePassesCount ?? 0).toLocaleString()}</span>
+            </button>
+            <button
+              onClick={onGoInsights}
+              className="flex items-center justify-between"
+              style={{ width: "100%", textAlign: "left", padding: "12px 14px", borderRadius: 10, border: `1px solid ${C.r3s}`, background: C.r3s, cursor: "pointer" }}
+            >
+              <div>
+                <div style={{ fontSize: 12.5, fontWeight: 700, color: C.r3 }}>Near-miss removals</div>
+                <div style={{ fontSize: 11, color: C.slate, marginTop: 2 }}>Below the floor, a small favourable move clears them</div>
+              </div>
+              <span style={{ fontFamily: MONO, fontSize: 20, fontWeight: 800, color: C.r3 }}>{(insights?.nearMissFailsCount ?? 0).toLocaleString()}</span>
+            </button>
           </div>
         </Panel>
       </div>
@@ -307,8 +319,13 @@ function RuleStat({ r, delay, mounted }) {
   return (
     <Panel style={{ padding: 18 }}>
       <div className="flex items-center justify-between"><Tag rule={r} /><span style={{ color: C.mute, fontSize: 12 }}>{r === 1 ? "Min value" : r === 2 ? "Currency" : "Collateral"}</span></div>
-      <div style={{ fontFamily: MONO, fontSize: 28, fontWeight: 700, marginTop: 12 }}>{Math.round(n).toLocaleString()}</div>
-      <div style={{ color: C.slate, fontSize: 12.5 }}>failed · {(100 - pct).toFixed(1)}% passed</div>
+      <div className="flex items-baseline gap-2" style={{ marginTop: 12 }}>
+        <span style={{ fontFamily: MONO, fontSize: 28, fontWeight: 700 }}>{Math.round(n).toLocaleString()}</span>
+        <span style={{ color: C.slate, fontSize: 12.5 }}>failed</span>
+      </div>
+      <div style={{ marginTop: 6 }}>
+        <span style={{ fontFamily: MONO, fontSize: 12.5, fontWeight: 700, color: C.green, background: C.greenSoft, padding: "2px 8px", borderRadius: 5 }}>{(100 - pct).toFixed(1)}% passed</span>
+      </div>
       <div style={{ height: 5, background: C.paper, borderRadius: 3, marginTop: 10, overflow: "hidden" }}>
         <div style={{ width: mounted ? `${Math.min(pct * 6, 100)}%` : "0%", height: "100%", background: RULE[r].c, transition: `width 1s ease ${delay * 0.1}s` }} />
       </div>
@@ -318,7 +335,7 @@ function RuleStat({ r, delay, mounted }) {
 
 /* ---------- Compliance ---------- */
 function Compliance() {
-  const { fails, total, portfolio } = React.useContext(DataContext);
+  const { fails, total, portfolio, run_id } = React.useContext(DataContext);
   const rows = [
     { r: 1, name: "Minimum loan value", cond: "> €25,000 (EUR)", fail: fails[1] },
     { r: 2, name: "Currency matches HQ", cond: "currency == country", fail: fails[2] }, 
@@ -336,6 +353,36 @@ function Compliance() {
           <tbody>{rows.map((x) => <tr key={x.r} style={{ borderTop: `1px solid ${C.line}` }}><td style={{ padding: "12px 0" }}><Tag rule={x.r} /> <span style={{ fontSize: 13, marginLeft: 6 }}>{x.name}</span></td><td style={{ fontFamily: MONO, fontSize: 12, color: C.slate }}>{x.cond}</td><td style={{ fontFamily: MONO, fontSize: 13, color: C.green, fontWeight: 700, textAlign: "right" }}>{(total - x.fail).toLocaleString()}</td><td style={{ fontFamily: MONO, fontSize: 13, color: C.r3, fontWeight: 700, textAlign: "right" }}>{x.fail.toLocaleString()}</td><td style={{ fontFamily: MONO, fontSize: 13, color: C.slate, textAlign: "right" }}>{total > 0 ? ((x.fail / total) * 100).toFixed(1) : "0.0"}%</td></tr>)}</tbody>
         </table>
       </Panel>
+
+      <Panel style={{ padding: 22 }}>
+        <div className="flex items-center gap-2" style={{ marginBottom: 4 }}><Download size={16} color={C.slate} /><span style={{ fontSize: 15, fontWeight: 700 }}>Compliance report</span></div>
+        <div style={{ color: C.slate, fontSize: 13, margin: "4px 0 16px" }}>Generated from this run's results — nothing is recomputed at download time.</div>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <a
+            href={run_id ? `/api/reports/${run_id}/pdf` : undefined}
+            className="flex items-center gap-3"
+            style={{ padding: "14px 16px", borderRadius: 10, border: `1px solid ${C.line}`, textDecoration: "none", color: C.text, opacity: run_id ? 1 : 0.5, pointerEvents: run_id ? "auto" : "none" }}
+          >
+            <div style={{ width: 36, height: 36, borderRadius: 8, background: C.r3s, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}><FileText size={17} color={C.r3} /></div>
+            <div>
+              <div style={{ fontSize: 13.5, fontWeight: 700 }}>Download PDF report</div>
+              <div style={{ fontSize: 12, color: C.slate, marginTop: 2 }}>Narrative summary — per-rule breakdown, disposition, portfolio</div>
+            </div>
+          </a>
+          <a
+            href={run_id ? `/api/reports/${run_id}/csv` : undefined}
+            className="flex items-center gap-3"
+            style={{ padding: "14px 16px", borderRadius: 10, border: `1px solid ${C.line}`, textDecoration: "none", color: C.text, opacity: run_id ? 1 : 0.5, pointerEvents: run_id ? "auto" : "none" }}
+          >
+            <div style={{ width: 36, height: 36, borderRadius: 8, background: C.greenSoft, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}><Download size={17} color={C.green} /></div>
+            <div>
+              <div style={{ fontSize: 13.5, fontWeight: 700 }}>Download CSV data</div>
+              <div style={{ fontSize: 12, color: C.slate, marginTop: 2 }}>One row per loan — every verdict, resolution, and applied fix</div>
+            </div>
+          </a>
+        </div>
+      </Panel>
+
       <Panel style={{ padding: 22 }}>
         <div className="flex items-center gap-2" style={{ marginBottom: 14 }}><Building2 size={16} color={C.slate} /><span style={{ fontSize: 15, fontWeight: 700 }}>Portfolio exposure — top companies</span></div>
         <table style={{ width: "100%", borderCollapse: "collapse" }}>
@@ -435,12 +482,13 @@ function InsightsTab() {
 
 
 /* ---------- Review ---------- */
-function Review({ st, setSt }) {
+function Review({ st, setSt, onRefresh }) {
   const { anyFail, groups } = React.useContext(DataContext);
   const set = (id, p) => setSt((s) => ({ ...s, [id]: { ...s[id], ...p } }));
   const gen = (id) => { set(id, { sum: "loading" }); setTimeout(() => set(id, { sum: "done" }), 850); };
   const resolved = Object.values(st).reduce((a, x) => a + (x.resolved || 0), 0);
   const [applying, setApplying] = useState({}); // loanId -> bool, disables buttons mid-request
+  const [bulkApplying, setBulkApplying] = useState({}); // groupId -> bool, disables Accept/Ignore all mid-request
 
   // The one real integration point for the human-in-the-loop actions
   // (Action_Engine.md section 9): calls the backend's decide endpoint for
@@ -481,13 +529,41 @@ function Review({ st, setSt }) {
         });
       }
       set(g.id, { resolved: (st[g.id]?.resolved || 0) + 1 });
+      // Every decision re-checks through OPA and updates the loan's row on
+      // the backend already - refetching here is what actually
+      // "recategorises": buckets, groups, the dashboard score and the
+      // compliance breakdown are all recomputed fresh from that new state.
+      if (onRefresh) await onRefresh();
     } catch (e) {
       console.error(`Failed to apply ${decision} for ${loanId}:`, e);
     } finally {
       setApplying((a) => ({ ...a, [loanId]: false }));
     }
   };
-  
+
+  // Fixes "Accept all" / "Ignore all", which previously only bumped a local
+  // counter and never touched the backend (loans stayed unresolved and the
+  // dashboard never moved). Now calls the real bulk-decide endpoint, which
+  // applies the decision to every loan in the group server-side and
+  // re-checks each one through OPA.
+  const bulkDecide = async (g, decision) => {
+    setBulkApplying((a) => ({ ...a, [g.id]: true }));
+    try {
+      const res = await fetch(`/api/review/groups/${g.id}/bulk-decide`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ decision }),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const body = await res.json();
+      set(g.id, { resolved: (st[g.id]?.resolved || 0) + (body.applied || 0) });
+      if (onRefresh) await onRefresh();
+    } catch (e) {
+      console.error(`Bulk ${decision} failed for group ${g.id}:`, e);
+    } finally {
+      setBulkApplying((a) => ({ ...a, [g.id]: false }));
+    }
+  };
+
   return (
     <div className="flex flex-col gap-4">
       <div className="flex items-center justify-between" style={{ padding: "12px 16px", background: "#fff", border: `1px solid ${C.line}`, borderRadius: 12 }}>
@@ -529,7 +605,24 @@ function Review({ st, setSt }) {
                   ))}
                   <div className="flex items-center justify-between" style={{ paddingTop: 12 }}>
                     <span style={{ fontSize: 12, color: C.mute }}>{g.samples?.length || 0} of {g.count.toLocaleString()} shown · bulk applies the same fix</span>
-                    <div className="flex gap-2"><Btn kind="red" onClick={() => set(g.id, { resolved: g.count })}><X size={14} /> Ignore all</Btn><Btn kind="solid" onClick={() => set(g.id, { resolved: g.count })}><Check size={14} /> Accept all</Btn></div>
+                    <div className="flex gap-2">
+                      <Btn
+                        kind="red"
+                        disabled={bulkApplying[g.id]}
+                        style={{ opacity: bulkApplying[g.id] ? 0.5 : 1, cursor: bulkApplying[g.id] ? "not-allowed" : "pointer" }}
+                        onClick={() => bulkDecide(g, "ignore")}
+                      >
+                        {bulkApplying[g.id] ? <Loader2 size={14} className="spin" /> : <X size={14} />} Ignore all
+                      </Btn>
+                      <Btn
+                        kind="solid"
+                        disabled={bulkApplying[g.id]}
+                        style={{ opacity: bulkApplying[g.id] ? 0.5 : 1, cursor: bulkApplying[g.id] ? "not-allowed" : "pointer" }}
+                        onClick={() => bulkDecide(g, "accept")}
+                      >
+                        {bulkApplying[g.id] ? <Loader2 size={14} className="spin" /> : <Check size={14} />} Accept all
+                      </Btn>
+                    </div>
                   </div>
                 </div>
               </div>
@@ -578,7 +671,7 @@ function buildBlurb(page, ctx, data) {
   if (!data) return "";
   switch (page) {
     case "dashboard":
-      return `Dashboard. This run moved compliance from ${data.pre}% pre-review to ${data.post}% after healing. Rule 2 (currency) had the most failures at ${data.fails[2].toLocaleString()}, then Rule 3 (collateral) at ${data.fails[3].toLocaleString()}, then Rule 1 at ${data.fails[1].toLocaleString()}. ${data.removed.toLocaleString()} loans removed as genuinely below the €25,000 floor.`;
+      return `Dashboard. This run moved compliance from ${data.pre}% pre-review to ${data.post}% after healing. Rule 2 (currency) had the most failures at ${data.fails[2].toLocaleString()}, then Rule 3 (collateral) at ${data.fails[3].toLocaleString()}, then Rule 1 at ${data.fails[1].toLocaleString()}. ${data.removed.toLocaleString()} loans removed as genuinely below the €25,000 floor.\n\nAsk me things like "how many loans are pending review?", "why did loan L000012 fail?", or just say hi 👋`;
     case "compliance": {
       const top = data.portfolio?.[0];
       if (!top) return "Compliance. Each Rego rule with its pass/fail split, plus portfolio exposure by company.";
@@ -652,7 +745,7 @@ function Assistant({ page, ctx, open, onToggle }) {
             {sending && <div style={{ alignSelf: "flex-start", display: "flex", alignItems: "center", gap: 6, color: C.mute, fontSize: 12, padding: "9px 12px" }}><Loader2 size={13} className="spin" /> Thinking…</div>}
           </div>
           <div className="flex gap-2" style={{ padding: 14, borderTop: `1px solid ${C.line}` }}>
-            <input value={txt} onChange={(e) => setTxt(e.target.value)} onKeyDown={(e) => e.key === "Enter" && send()} disabled={sending} placeholder="Ask about this page…" style={{ flex: 1, fontSize: 13, fontFamily: FONT, border: `1px solid ${C.lineStrong}`, borderRadius: 8, padding: "8px 11px", outline: "none" }} />
+            <input value={txt} onChange={(e) => setTxt(e.target.value)} onKeyDown={(e) => e.key === "Enter" && send()} disabled={sending} placeholder={page === "dashboard" ? "Ask about this page… or a loan ID like L000012" : "Ask about this page…"} style={{ flex: 1, fontSize: 13, fontFamily: FONT, border: `1px solid ${C.lineStrong}`, borderRadius: 8, padding: "8px 11px", outline: "none" }} />
             <Btn kind="solid" onClick={send} disabled={sending} style={{ padding: "8px 11px", opacity: sending ? 0.6 : 1 }}><Send size={15} /></Btn>
           </div>
         </div>
@@ -695,10 +788,10 @@ export default function App() {
   const reviewResolved = Object.values(reviewState).reduce((a, x) => a + (x.resolved || 0), 0);
   
   const nav = [
-    { id: "dashboard", label: "Dashboard", icon: LayoutDashboard }, 
+    { id: "dashboard", label: "Dashboard", icon: LayoutDashboard },
+    { id: "review", label: "Review", icon: ClipboardCheck, badge: data.anyFail > 0 ? `${(data.anyFail / 1000).toFixed(1)}k` : undefined },
+    { id: "insights", label: "Insights", icon: Lightbulb },
     { id: "compliance", label: "Compliance", icon: ShieldCheck },
-    { id: "insights", label: "Insights", icon: Lightbulb }, 
-    { id: "review", label: "Review", icon: ClipboardCheck, badge: data.anyFail > 0 ? `${(data.anyFail / 1000).toFixed(1)}k` : undefined }, 
     { id: "history", label: "History", icon: HistoryIcon }
   ];
   
@@ -750,10 +843,10 @@ export default function App() {
             </div>
           </div>
           <div className="w-full flex-1" style={{ padding: 32 }}>
-            {tab === "dashboard" && <Dashboard />}
+            {tab === "dashboard" && <Dashboard onGoInsights={() => setTab("insights")} />}
             {tab === "compliance" && <Compliance />}
             {tab === "insights" && <InsightsTab />}
-            {tab === "review" && <Review st={reviewState} setSt={setReviewState} />}
+            {tab === "review" && <Review st={reviewState} setSt={setReviewState} onRefresh={fetchBackendData} />}
             {tab === "history" && <HistoryTab />}
           </div>
         </div>
