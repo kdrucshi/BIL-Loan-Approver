@@ -1,0 +1,44 @@
+<mxfile host="app.diagrams.net" modified="2026-08-05T00:00:00.000Z" agent="GitHub Copilot" version="24.7.7" type="device">
+  <diagram id="processing-pipeline" name="Processing Pipeline">
+    <mxGraphModel dx="1200" dy="1200" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="900" pageHeight="1300" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="2" value="loans.csv\n(100k rows)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;strokeWidth=2;arcSize=12;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="300" y="40" width="300" height="70" as="geometry" />
+        </mxCell>
+        <mxCell id="3" value="Parse PDF once\ncompany-reference.pdf → companies.json" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;strokeWidth=2;arcSize=12;" vertex="1" parent="1">
+          <mxGeometry x="260" y="150" width="380" height="80" as="geometry" />
+        </mxCell>
+        <mxCell id="4" value="Build OPA inputs\ncompute_inputs.py" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;strokeWidth=2;arcSize=12;" vertex="1" parent="1">
+          <mxGeometry x="280" y="270" width="340" height="70" as="geometry" />
+        </mxCell>
+        <mxCell id="5" value="Fetch FX rates once per run\nfx.py + cache fallback" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;strokeWidth=2;arcSize=12;" vertex="1" parent="1">
+          <mxGeometry x="220" y="380" width="460" height="80" as="geometry" />
+        </mxCell>
+        <mxCell id="6" value="Batch 500 loans per request\nopa_client.py" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;strokeWidth=2;arcSize=12;" vertex="1" parent="1">
+          <mxGeometry x="280" y="500" width="340" height="70" as="geometry" />
+        </mxCell>
+        <mxCell id="7" value="OPA / Rego\nRule 1, Rule 2, Rule 3" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;strokeWidth=2;arcSize=12;" vertex="1" parent="1">
+          <mxGeometry x="270" y="610" width="360" height="80" as="geometry" />
+        </mxCell>
+        <mxCell id="8" value="Persist results\nSQLite: loans, rule_results, audit_events, suggestions" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;strokeWidth=2;arcSize=12;" vertex="1" parent="1">
+          <mxGeometry x="210" y="730" width="480" height="90" as="geometry" />
+        </mxCell>
+        <mxCell id="9" value="Review UI + reports\nFastAPI read endpoints + review actions" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;strokeWidth=2;arcSize=12;" vertex="1" parent="1">
+          <mxGeometry x="220" y="860" width="460" height="90" as="geometry" />
+        </mxCell>
+        <mxCell id="10" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeColor=#6c8ebf;strokeWidth=2;endArrow=block;html=1;" edge="1" parent="1" source="2" target="3"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="11" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeColor=#82b366;strokeWidth=2;endArrow=block;html=1;" edge="1" parent="1" source="3" target="4"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="12" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeColor=#82b366;strokeWidth=2;endArrow=block;html=1;" edge="1" parent="1" source="4" target="5"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="13" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeColor=#82b366;strokeWidth=2;endArrow=block;html=1;" edge="1" parent="1" source="5" target="6"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="14" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeColor=#82b366;strokeWidth=2;endArrow=block;html=1;" edge="1" parent="1" source="6" target="7"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="15" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeColor=#d6b656;strokeWidth=2;endArrow=block;html=1;" edge="1" parent="1" source="7" target="8"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="16" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeColor=#6c8ebf;strokeWidth=2;endArrow=block;html=1;" edge="1" parent="1" source="8" target="9"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="17" value="Input → processing → output\nData stays in Decimal form until the OPA boundary. Rule 3 suggestions pause for human review before any apply step." style="text;html=1;align=center;verticalAlign=middle;whiteSpace=wrap;" vertex="1" parent="1">
+          <mxGeometry x="180" y="990" width="540" height="70" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>
