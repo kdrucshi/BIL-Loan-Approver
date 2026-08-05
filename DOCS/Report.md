@@ -11,9 +11,9 @@ This document assumes the data model in [Evaluation_Engine.md](./Evaluation_Engi
 (`loans`, `companies`, `assets`, `rule_results`, `audit_events`, `run_meta`) and the
 review flow in [Action_Engine.md](./Action_Engine.md).
 
----
+----
 
-## 1. Why two formats, not one
+## 1. Why two formats, nots one
 
 | | PDF | CSV |
 |---|---|---|
