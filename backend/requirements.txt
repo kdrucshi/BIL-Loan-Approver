@@ -1,0 +1,12 @@
+pdfplumber
+requests
+truststore
+fastapi
+uvicorn[standard]
+python-multipart
+pytest
+reportlab
+langgraph
+langchain-openai
+openai
+python-dotenv
